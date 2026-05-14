@@ -1,0 +1,13 @@
+.DS_Store
+*.dSYM
+*.icns
+*.tmp
+*.log
+
+/build/
+/dist/
+/DerivedData/
+/.swiftpm/
+
+# Keep source and vendored browser dependencies in git.
+!vendor/

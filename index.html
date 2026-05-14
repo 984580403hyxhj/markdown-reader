@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Markdown Reader</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell theme-light" id="app">
+      <aside class="sidebar" aria-label="文件信息">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <img src="./src/app-icon.png" alt="" />
+          </div>
+          <div>
+            <h1>Markdown Reader</h1>
+            <p>GitHub-style local preview</p>
+          </div>
+        </div>
+
+        <div class="open-actions">
+          <button class="primary-action" id="openFileButton" type="button">
+            <span aria-hidden="true">⌘</span>
+            打开文件
+          </button>
+          <button class="secondary-action" id="openFolderButton" type="button">
+            打开文件夹
+          </button>
+        </div>
+        <input
+          class="sr-only"
+          id="fileInput"
+          type="file"
+          accept=".md,.markdown,.mdown,.mkdn,.txt,.csv,.tsv,.xls,.xlsx,text/markdown,text/plain,text/csv,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        />
+        <input class="sr-only" id="folderInput" type="file" webkitdirectory multiple />
+
+        <section class="meta-panel" aria-label="当前文件">
+          <div class="file-chip">
+            <span class="file-icon" id="fileKindBadge" aria-hidden="true">MD</span>
+            <span id="fileName" title="欢迎.md">欢迎.md</span>
+          </div>
+          <dl class="file-stats">
+            <div>
+              <dt>大小</dt>
+              <dd id="fileSize">0 B</dd>
+            </div>
+            <div>
+              <dt id="lineStatLabel">行数</dt>
+              <dd id="lineCount">0</dd>
+            </div>
+            <div>
+              <dt id="wordStatLabel">字词</dt>
+              <dd id="wordCount">0</dd>
+            </div>
+            <div>
+              <dt>修改</dt>
+              <dd id="modifiedDate">示例</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="document-list-panel" id="documentListPanel" aria-label="文件夹中的可读文件" hidden>
+          <h2>打开过</h2>
+          <div class="document-list" id="documentList"></div>
+        </section>
+
+        <div class="sidebar-actions" aria-label="视图设置">
+          <button class="icon-button" id="themeButton" type="button" aria-label="切换到暗色模式" title="暗色模式">
+            <span aria-hidden="true">◐</span>
+          </button>
+          <button class="icon-button" id="outlineButton" type="button" aria-label="隐藏目录" title="隐藏目录">
+            <span aria-hidden="true">☰</span>
+          </button>
+        </div>
+      </aside>
+
+      <div class="column-resizer column-resizer-left" id="leftResizer" role="separator" aria-label="调整左侧栏宽度"></div>
+
+      <section class="reader-zone" id="readerZone">
+        <header class="reader-toolbar">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2 id="readerTitle" title="欢迎.md">欢迎.md</h2>
+          </div>
+          <div class="drop-target">拖入 Markdown、TXT、CSV 或 Excel 文件</div>
+        </header>
+
+        <div class="notice" id="notice" hidden></div>
+        <div class="sheet-tabs" id="sheetTabs" hidden></div>
+        <article class="markdown-body markdown-preview" id="preview">
+          <div class="preview-canvas" id="previewCanvas">
+            <div class="preview-content" id="previewContent"></div>
+          </div>
+        </article>
+
+        <div class="drag-overlay" id="dragOverlay" aria-hidden="true" hidden>
+          <span>松开后打开</span>
+        </div>
+
+        <div class="zoom-status" id="zoomStatus" aria-label="缩放状态">
+          <button id="copyAllButton" type="button" hidden>复制全文</button>
+          <span id="zoomPercent">100%</span>
+          <button id="zoomResetButton" type="button">Reset</button>
+        </div>
+      </section>
+
+      <div class="column-resizer column-resizer-right" id="rightResizer" role="separator" aria-label="调整目录栏宽度"></div>
+
+      <nav class="outline" id="outline" aria-label="文档目录">
+        <div class="outline-heading">
+          <span aria-hidden="true">☰</span>
+          <span>目录</span>
+        </div>
+        <ol id="outlineList"></ol>
+      </nav>
+    </main>
+    <script defer src="./vendor/xlsx.full.min.js"></script>
+    <script defer src="./src/main.js"></script>
+  </body>
+</html>
