@@ -7,6 +7,7 @@ A local macOS reader for Markdown, text, CSV, TSV, XLS, and XLSX files. It opens
 - Markdown and TXT preview with outline navigation.
 - CSV, TSV, XLS, and XLSX preview with worksheet tabs.
 - Open-history sidebar with removable entries.
+- Restores the open-history sidebar across app restarts.
 - Drag-resizable sidebar and outline panels.
 - Preview-style zoom with percentage display and reset.
 - One-click full-text copy for Markdown and TXT files.

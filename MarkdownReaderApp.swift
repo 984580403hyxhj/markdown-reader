@@ -18,7 +18,7 @@ private let readableContentTypes = readableExtensions.compactMap {
     UTType(filenameExtension: $0)
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private var window: NSWindow!
     private var webView: WKWebView!
     private var pageLoaded = false
@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         webView?.stopLoading()
         webView?.navigationDelegate = nil
         webView?.uiDelegate = nil
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "markdownReader")
         return .terminateNow
     }
 
@@ -158,6 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         }
 
         let configuration = WKWebViewConfiguration()
+        let userContentController = WKUserContentController()
+        userContentController.add(self, name: "markdownReader")
+        configuration.userContentController = userContentController
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
 
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -235,6 +239,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         flushPendingURLs()
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard
+            message.name == "markdownReader",
+            let body = message.body as? [String: Any],
+            let type = body["type"] as? String
+        else {
+            return
+        }
+
+        switch type {
+        case "openFiles":
+            openDocument(nil)
+        case "readFile":
+            guard
+                let requestID = body["requestId"] as? String,
+                let path = body["path"] as? String
+            else {
+                return
+            }
+            sendReadFileResult(path: path, requestID: requestID)
+        default:
+            return
+        }
+    }
+
     func webView(
         _ webView: WKWebView,
         runOpenPanelWith parameters: WKOpenPanelParameters,
@@ -306,7 +335,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         }
     }
 
-    private func payloadJSON(for url: URL) -> String? {
+    private func sendReadFileResult(path: String, requestID: String) {
+        let url = URL(fileURLWithPath: path)
+        let response: [String: Any]
+
+        if isReadableFile(url), let payload = payloadObject(for: url) {
+            response = [
+                "requestId": requestID,
+                "ok": true,
+                "payload": payload,
+            ]
+        } else {
+            response = [
+                "requestId": requestID,
+                "ok": false,
+                "error": "File is not readable",
+            ]
+        }
+
+        guard let json = jsonString(for: response) else {
+            return
+        }
+
+        let script = """
+        if (window.markdownReaderNativeFileResult) {
+          window.markdownReaderNativeFileResult(\(json));
+        }
+        """
+
+        webView.evaluateJavaScript(script)
+    }
+
+    private func payloadObject(for url: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
@@ -316,16 +376,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let modifiedDate = attributes[.modificationDate] as? Date
         let modified = Int(modifiedDate?.timeIntervalSince1970 ?? 0)
 
-        let payload: [String: Any] = [
+        return [
             "base64": data.base64EncodedString(),
             "name": url.lastPathComponent,
             "path": url.path,
             "size": size,
             "modified": modified,
         ]
+    }
 
+    private func payloadJSON(for url: URL) -> String? {
+        guard let payload = payloadObject(for: url) else {
+            return nil
+        }
+
+        return jsonString(for: payload)
+    }
+
+    private func jsonString(for object: [String: Any]) -> String? {
         guard
-            let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+            let jsonData = try? JSONSerialization.data(withJSONObject: object),
             let json = String(data: jsonData, encoding: .utf8)
         else {
             return nil

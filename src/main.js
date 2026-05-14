@@ -32,6 +32,8 @@ console.log(readme);
 
 const bootstrap = window.__MARKDOWN_READER_BOOTSTRAP__ || null;
 const nativeHost = Boolean(window.__MARKDOWN_READER_NATIVE__);
+const historyStorageKey = "markdown-reader.opened-documents.v1";
+const historyStorageLimit = 100;
 
 function base64ToBytes(value) {
   try {
@@ -628,6 +630,59 @@ function modifiedDateFromValue(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function canUseNativeBridge() {
+  return Boolean(window.webkit?.messageHandlers?.markdownReader);
+}
+
+function postNativeMessage(message) {
+  if (!canUseNativeBridge()) return false;
+  window.webkit.messageHandlers.markdownReader.postMessage(message);
+  return true;
+}
+
+let nativeRequestSequence = 0;
+const nativeFileRequests = new Map();
+
+function requestNativeFile(path) {
+  return new Promise((resolve, reject) => {
+    const normalizedPath = normalizePath(path);
+    if (!nativeHost || !normalizedPath || !canUseNativeBridge()) {
+      reject(new Error("Native bridge unavailable"));
+      return;
+    }
+
+    const requestId = `read-${Date.now()}-${nativeRequestSequence}`;
+    nativeRequestSequence += 1;
+    const timeout = window.setTimeout(() => {
+      nativeFileRequests.delete(requestId);
+      reject(new Error("Native file read timed out"));
+    }, 15000);
+
+    nativeFileRequests.set(requestId, { resolve, reject, timeout });
+
+    if (!postNativeMessage({ type: "readFile", requestId, path: normalizedPath })) {
+      window.clearTimeout(timeout);
+      nativeFileRequests.delete(requestId);
+      reject(new Error("Native bridge unavailable"));
+    }
+  });
+}
+
+window.markdownReaderNativeFileResult = (response) => {
+  const requestId = response?.requestId;
+  const pending = nativeFileRequests.get(requestId);
+  if (!pending) return;
+
+  window.clearTimeout(pending.timeout);
+  nativeFileRequests.delete(requestId);
+
+  if (response?.ok && response.payload) {
+    pending.resolve(response.payload);
+  } else {
+    pending.reject(new Error(response?.error || "Native file read failed"));
+  }
+};
+
 function createDocumentEntry({ file, path, name, size, modified, content, bytes }) {
   const resolvedPath = normalizePath(path || file?.webkitRelativePath || file?.relativePath || file?.name || name || "");
   const resolvedName = name || file?.name || fileNameFromPath(resolvedPath) || "未命名文件";
@@ -683,9 +738,84 @@ function mergeDocumentEntry(existing, documentEntry) {
   };
 }
 
+function isPersistableDocument(doc) {
+  if (!doc?.path || doc.kind === "unsupported") return false;
+  return !nativeHost || normalizePath(doc.path).startsWith("/");
+}
+
+function serializeDocument(doc) {
+  return {
+    path: doc.path,
+    name: doc.name,
+    size: doc.size,
+    modified: doc.modified instanceof Date ? doc.modified.toISOString() : doc.modified || null,
+    kind: doc.kind,
+    openedAt: doc.openedAt || Date.now(),
+    openedOrder: Number.isFinite(doc.openedOrder) ? doc.openedOrder : 0,
+  };
+}
+
+function saveDocumentHistory() {
+  try {
+    const docs = sortedDocuments()
+      .filter(isPersistableDocument)
+      .slice(0, historyStorageLimit)
+      .map(serializeDocument);
+
+    if (docs.length) {
+      localStorage.setItem(historyStorageKey, JSON.stringify(docs));
+    } else {
+      localStorage.removeItem(historyStorageKey);
+    }
+  } catch {
+    // History is a convenience feature; the reader still works if storage is unavailable.
+  }
+}
+
+function restoreDocumentHistory() {
+  let storedDocs = [];
+
+  try {
+    const raw = localStorage.getItem(historyStorageKey);
+    storedDocs = raw ? JSON.parse(raw) : [];
+  } catch {
+    storedDocs = [];
+  }
+
+  if (!Array.isArray(storedDocs)) return;
+
+  let maxOrder = state.documentSequence - 1;
+
+  storedDocs.forEach((entry, index) => {
+    const path = normalizePath(entry?.path || "");
+    const kind = getReadableKind(path || entry?.name);
+    if (!path || kind === "unsupported") return;
+    if (nativeHost && !path.startsWith("/")) return;
+
+    const openedOrder = Number.isFinite(entry.openedOrder) ? entry.openedOrder : index;
+    maxOrder = Math.max(maxOrder, openedOrder);
+
+    state.documents.set(path, {
+      file: null,
+      path,
+      name: entry.name || fileNameFromPath(path),
+      size: typeof entry.size === "number" ? entry.size : 0,
+      modified: modifiedDateFromValue(entry.modified),
+      kind,
+      content: "",
+      bytes: null,
+      openedAt: Number.isFinite(entry.openedAt) ? entry.openedAt : Date.now(),
+      openedOrder,
+    });
+  });
+
+  state.documentSequence = Math.max(state.documentSequence, maxOrder + 1);
+}
+
 function rememberDocument(documentEntry) {
   const existing = state.documents.get(documentEntry.path);
   state.documents.set(documentEntry.path, mergeDocumentEntry(existing, documentEntry));
+  saveDocumentHistory();
 }
 
 function documentDisplayName(doc) {
@@ -753,6 +883,7 @@ function removeDocument(path) {
   const normalizedPath = normalizePath(path);
   const removedActiveDocument = normalizedPath === normalizePath(state.currentFile.path);
   state.documents.delete(normalizedPath);
+  saveDocumentHistory();
 
   if (!removedActiveDocument) {
     updateDocumentList();
@@ -1510,11 +1641,30 @@ async function loadDocument(path, hash = "") {
   const doc = state.documents.get(normalizePath(path));
   if (!doc) return;
 
-  if (doc.file && !doc.content && !doc.bytes) {
+  const needsContent =
+    (doc.kind === "markdown" && !doc.content) ||
+    (doc.kind === "spreadsheet" && !doc.bytes);
+
+  if (doc.file && needsContent) {
     await readFile(doc.file, doc.path);
     if (hash) {
       requestAnimationFrame(() => document.getElementById(hash)?.scrollIntoView({ block: "start" }));
     }
+    return;
+  }
+
+  if (nativeHost && needsContent && doc.path) {
+    try {
+      const payload = await requestNativeFile(doc.path);
+      activateDocument(createDocumentEntryFromPayload(payload), hash);
+    } catch {
+      showNotice("无法重新读取这个文件。它可能被移动、删除，或当前没有访问权限。");
+    }
+    return;
+  }
+
+  if (needsContent) {
+    showNotice("浏览器不能自动重新读取上次的本地文件，请重新打开一次。");
     return;
   }
 
@@ -1609,7 +1759,10 @@ async function getDroppedFiles(dataTransfer) {
   return [...dataTransfer.files];
 }
 
-elements.openFileButton.addEventListener("click", () => elements.fileInput.click());
+elements.openFileButton.addEventListener("click", () => {
+  if (nativeHost && postNativeMessage({ type: "openFiles" })) return;
+  elements.fileInput.click();
+});
 elements.openFolderButton.addEventListener("click", () => elements.folderInput.click());
 
 elements.fileInput.addEventListener("change", () => {
@@ -1764,6 +1917,8 @@ window.markdownReaderOpenFile = (payload) => {
     showNotice("读取文件失败，请确认文件可访问。");
   }
 };
+
+restoreDocumentHistory();
 
 if (bootstrap?.base64) {
   rememberDocument(createDocumentEntryFromPayload(bootstrap));
